@@ -18,7 +18,7 @@ import { useUser } from "../../context/UserContextApi";
 import { RiLogoutBoxLine } from "react-icons/ri";
 import { useNavigate } from "react-router-dom";
 import Peer from "simple-peer";
-import { toast } from "react-hot-toast";
+import { toast, Toaster } from "react-hot-toast";
 
 const Dashboard = () => {
   const { user, updateUser } = useUser();
@@ -61,193 +61,240 @@ const Dashboard = () => {
 
   const socket = socketInstance.getSocket();
 
-  useEffect(() => {
-    // Check if `user` and `socket` exist and if the user has not already joined the socket room.
-    if (user && socket && !hasJoined.current) {
-      // Emit a "join" event to the server with the user's ID and username.
-      socket.emit("join", { id: user._id, name: user.username });
-      // Mark `hasJoined.current` as `true` to ensure the user does not join multiple times.
-      hasJoined.current = true;
-    }
-    // Listen for the "me" event, which provides the current user's socket ID.
-    socket.on("me", (id) => setMe(id));
-    // Listen for "callToUser" event, which means another user is calling the current user.
-    socket.on("callToUser", (data) => {
-      setReciveCall(true); // Set state to indicate an incoming call.
-      setCaller(data); // Store caller's information in state.
-      setCallerName(data.name); // Store caller's name.
-      setCallerSignal(data.signal); // Store WebRTC signal data for the call.
-      // ✅ Start playing ringtone
-      ringtone.play();
-    });
-    // Listen for "callRejected" event, which is triggered when the other user declines the call.
-    socket.on("callRejected", (data) => {
-      setCallRejectedPopUp(true);
-      setCallrejectorData(data);
-      // ✅ Stop ringtone in case call is ended before acceptance
-      // ✅ Stop ringtone when call is accepted
-      ringtone.stop();
-    });
-    // Listen for "callEnded" event, which is triggered when the other user ends the call.
-    socket.on("callEnded", (data) => {
-      console.log("Call ended by", data.name); // Log the event in the console.
-      // ✅ Stop ringtone in case call is ended before acceptance
-      ringtone.stop();
-      endCallCleanup(); // Call a function to clean up the call state.
-    });
-    // Listen for "userUnavailable" event, meaning the user being called is not online.
-    socket.on("userUnavailable", (data) => {
-      alert(data.message || "User is not available."); // Show an alert.
-    });
-    // Listen for "userBusy" event, meaning the user is already on another call.
-    socket.on("userBusy", (data) => {
-      alert(data.message || "User is currently in another call."); // Show an alert.
-    });
-    // Listen for "online-users" event, which provides the list of currently online users.
-    socket.on("online-users", (onlineUsers) => {
-      setUserOnline(onlineUsers); // Update state with the list of online users.
-    });
-    // Cleanup function: Runs when the component unmounts or dependencies change.
-    return () => {
-      socket.off("me"); // Remove listener for "me" event.
-      socket.off("callToUser"); // Remove listener for incoming calls.
-      socket.off("callRejected"); // Remove listener for call rejection.
-      socket.off("callEnded"); // Remove listener for call ending.
-      socket.off("userUnavailable"); // Remove listener for unavailable user.
-      socket.off("userBusy"); // Remove listener for busy user.
-      socket.off("online-users"); // Remove listener for online users list.
-    };
-  }, [user, socket]); // Dependencies: This effect runs whenever `user` or `socket` changes.
+ useEffect(() => {
+   // Check if `user` and `socket` exist and if the user has not already joined the socket room.
+   if (user && socket && !hasJoined.current) {
+     console.log("Joining socket room with user ID:", user._id);
+     // Emit a "join" event to the server with the user's ID and username.
+     socket.emit("join", { id: user._id, name: user.username });
+     // Mark `hasJoined.current` as `true` to ensure the user does not join multiple times.
+     hasJoined.current = true;
+   }
 
-  const startCall = async () => {
-    try {
-      // First check if media devices are available
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasVideo = devices.some(device => device.kind === 'videoinput');
-      const hasAudio = devices.some(device => device.kind === 'audioinput');
+   // Debug socket connection
+   socket.on("connect", () => {
+     console.log("Socket connected with ID:", socket.id);
+   });
 
-      if (!hasVideo || !hasAudio) {
-        toast.error("Camera or microphone not found. Please check your device connections.");
-        return;
-      }
+   // Listen for the "me" event, which provides the current user's socket ID.
+   socket.on("me", (id) => {
+     console.log("Received 'me' event with ID:", id);
+     setMe(id);
+   });
 
-      // Request access to the user's media devices (camera & microphone)
-      const currentStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: "user"
-        },
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        },
-      });
+   // Listen for "callToUser" event with improved error handling
+   socket.on("callToUser", (data) => {
+     console.log("📞 Incoming call received:", data);
+     try {
+       setReciveCall(true);
+       setCaller(data);
+       setCallerName(data.name || "Unknown Caller");
+       setCallerSignal(data.signal);
 
-      // Store the stream in state so it can be used later
-      setStream(currentStream);
+       // Make sure the ringtone plays correctly
+       ringtone.stop(); // Stop any existing ringtone first
+       ringtone.play().catch((err) => {
+         console.error("Error playing ringtone:", err);
+       });
+     } catch (error) {
+       console.error("Error handling incoming call:", error);
+       toast.error("Problem receiving call. Please refresh the page.");
+     }
+   });
 
-      // Assign the stream to the local video element for preview
-      if (myVideo.current) {
-        myVideo.current.srcObject = currentStream;
-        myVideo.current.muted = true; // Mute local audio to prevent feedback
-        myVideo.current.volume = 0; // Set volume to zero to avoid echo
-      }
+   // Rest of your event listeners...
 
-      // Ensure that the audio track is enabled
-      currentStream.getAudioTracks().forEach((track) => (track.enabled = true));
+   // Cleanup function: Runs when the component unmounts or dependencies change.
+   return () => {
+     console.log("Cleaning up socket event listeners");
+     socket.off("me");
+     socket.off("callToUser");
+     socket.off("callRejected");
+     socket.off("callEnded");
+     socket.off("userUnavailable");
+     socket.off("userBusy");
+     socket.off("online-users");
+   };
+ }, [user, socket]); // Dependencies: This effect runs whenever `user` or `socket` changes.
 
-      // Close the sidebar (if open) and set the selected user for the call
-      setCallRejectedPopUp(false);
-      setIsSidebarOpen(false);
-      setCallerWating(true); // waiting to join receiver
-      setSelectedUser(modalUser._id);
+ const startCall = async () => {
+   try {
+     // First check if media devices are available
+     const devices = await navigator.mediaDevices.enumerateDevices();
+     const hasVideo = devices.some((device) => device.kind === "videoinput");
+     const hasAudio = devices.some((device) => device.kind === "audioinput");
 
-      // Create a new Peer connection (WebRTC) as the call initiator
-      const peer = new Peer({
-        initiator: true,
-        trickle: false,
-        stream: currentStream,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        }
-      });
+     if (!hasVideo || !hasAudio) {
+       toast.error(
+         "Camera or microphone not found. Please check your device connections."
+       );
+       return;
+     }
 
-      // Handle the "signal" event
-      peer.on("signal", (data) => {
-        socket.emit("callToUser", {
-          callToUserId: modalUser._id,
-          signalData: data,
-          from: me,
-          name: user.username,
-          email: user.email,
-          profilepic: user.profilepic,
-        });
-      });
+     // Verify socket and modalUser are defined before proceeding
+     if (!socket) {
+       console.error("Socket connection is not available");
+       toast.error("Network connection issue. Please refresh the page.");
+       return;
+     }
 
-      // Handle the "stream" event
-      peer.on("stream", (remoteStream) => {
-        if (reciverVideo.current) {
-          reciverVideo.current.srcObject = remoteStream;
-          reciverVideo.current.muted = false;
-          reciverVideo.current.volume = 1.0;
-        }
-      });
+     if (!modalUser || !modalUser._id) {
+       console.error("Selected user details are missing");
+       toast.error(
+         "User information is incomplete. Please select the user again."
+       );
+       return;
+     }
 
-      // Handle errors from the peer connection
-      peer.on("error", (err) => {
-        console.error("Peer connection error:", err);
-        toast.error("Connection error. Please try again.");
-        endCallCleanup();
-      });
+     // Request access to the user's media devices (camera & microphone)
+     const currentStream = await navigator.mediaDevices.getUserMedia({
+       video: {
+         width: { ideal: 1280 },
+         height: { ideal: 720 },
+         facingMode: "user",
+       },
+       audio: {
+         echoCancellation: true,
+         noiseSuppression: true,
+         autoGainControl: true,
+       },
+     });
 
-      // Listen for "callAccepted" event
-      socket.once("callAccepted", (data) => {
-        setCallRejectedPopUp(false);
-        setCallAccepted(true);
-        setCallerWating(false);
-        setCaller(data.from);
-        peer.signal(data.signal);
-      });
+     // Store the stream in state so it can be used later
+     setStream(currentStream);
 
-      // Store the peer connection reference
-      connectionRef.current = peer;
-      setShowUserDetailModal(false);
+     // Assign the stream to the local video element for preview
+     if (myVideo.current) {
+       myVideo.current.srcObject = currentStream;
+       myVideo.current.muted = true; // Mute local audio to prevent feedback
+       myVideo.current.volume = 0; // Set volume to zero to avoid echo
+     }
 
-    } catch (error) {
-      console.error("Error accessing media devices:", error);
-      
-      // Provide specific error messages based on the error type
-      if (error.name === 'NotAllowedError') {
-        toast.error("Camera/microphone access was denied. Please allow access and try again.");
-      } else if (error.name === 'NotFoundError') {
-        toast.error("No camera or microphone found. Please check your device connections.");
-      } else if (error.name === 'NotReadableError') {
-        toast.error("Camera or microphone is already in use by another application.");
-      } else if (error.name === 'OverconstrainedError') {
-        toast.error("Camera doesn't support the requested resolution. Please try again.");
-      } else {
-        toast.error("Failed to access camera/microphone. Please check your device settings.");
-      }
-      
-      // Clean up any partial setup
-      endCallCleanup();
-    }
-  };
+     // Ensure that the audio track is enabled
+     currentStream.getAudioTracks().forEach((track) => (track.enabled = true));
+
+     // Close the sidebar (if open) and set the selected user for the call
+     setCallRejectedPopUp(false);
+     setIsSidebarOpen(false);
+     setCallerWating(true); // waiting to join receiver
+     setSelectedUser(modalUser._id);
+
+     // Get the socket ID for the current user
+     if (!me) {
+       console.error("Local socket ID is not set");
+       toast.error("Connection issue. Please refresh and try again.");
+       return;
+     }
+
+     console.log("Creating peer connection as initiator");
+     // Create a new Peer connection (WebRTC) as the call initiator
+     const peer = new Peer({
+       initiator: true,
+       trickle: false,
+       stream: currentStream,
+       config: {
+         iceServers: [
+           { urls: "stun:stun.l.google.com:19302" },
+           { urls: "stun:stun1.l.google.com:19302" },
+         ],
+       },
+     });
+
+     // Handle the "signal" event
+     peer.on("signal", (data) => {
+       console.log("Generated signal data for call to user:", modalUser._id);
+       socket.emit("callToUser", {
+         callToUserId: modalUser._id,
+         signalData: data,
+         from: me,
+         name: user.username,
+         email: user.email,
+         profilepic: user.profilepic,
+       });
+     });
+
+     // Handle the "stream" event
+     peer.on("stream", (remoteStream) => {
+       console.log("Received remote stream");
+       if (reciverVideo.current) {
+         reciverVideo.current.srcObject = remoteStream;
+         reciverVideo.current.muted = false;
+         reciverVideo.current.volume = 1.0;
+       }
+     });
+
+     // Handle errors from the peer connection
+     peer.on("error", (err) => {
+       console.error("Peer connection error:", err);
+       toast.error("Connection error. Please try again.");
+       endCallCleanup();
+     });
+
+     // Listen for "callAccepted" event
+     socket.once("callAccepted", (data) => {
+       console.log("Call accepted by remote user:", data);
+       setCallRejectedPopUp(false);
+       setCallAccepted(true);
+       setCallerWating(false);
+       setCaller(data.from);
+       if (data && data.signal) {
+         peer.signal(data.signal);
+       } else {
+         console.error("Received invalid call accepted data:", data);
+         toast.error("Connection error. Please try again.");
+         endCallCleanup();
+       }
+     });
+
+     // Store the peer connection reference
+     connectionRef.current = peer;
+     setShowUserDetailModal(false);
+   } catch (error) {
+     console.error("Error accessing media devices:", error);
+
+     // Provide specific error messages based on the error type
+     if (error.name === "NotAllowedError") {
+       toast.error(
+         "Camera/microphone access was denied. Please allow access and try again."
+       );
+     } else if (error.name === "NotFoundError") {
+       toast.error(
+         "No camera or microphone found. Please check your device connections."
+       );
+     } else if (error.name === "NotReadableError") {
+       toast.error(
+         "Camera or microphone is already in use by another application."
+       );
+     } else if (error.name === "OverconstrainedError") {
+       toast.error(
+         "Camera doesn't support the requested resolution. Please try again."
+       );
+     } else {
+       toast.error(
+         "Failed to access camera/microphone. Please check your device settings."
+       );
+     }
+
+     // Clean up any partial setup
+     endCallCleanup();
+   }
+ };
 
   const handelacceptCall = async () => {
     try {
+      console.log("Accepting call from:", caller);
+      // Stop the ringtone immediately
+      ringtone.stop();
+
       // First check if media devices are available
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasVideo = devices.some(device => device.kind === 'videoinput');
-      const hasAudio = devices.some(device => device.kind === 'audioinput');
+      const hasVideo = devices.some((device) => device.kind === "videoinput");
+      const hasAudio = devices.some((device) => device.kind === "audioinput");
 
       if (!hasVideo || !hasAudio) {
-        toast.error("Camera or microphone not found. Please check your device connections.");
+        toast.error(
+          "Camera or microphone not found. Please check your device connections."
+        );
         return;
       }
 
@@ -256,12 +303,12 @@ const Dashboard = () => {
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          facingMode: "user"
+          facingMode: "user",
         },
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
         },
       });
 
@@ -284,6 +331,7 @@ const Dashboard = () => {
       setCallerWating(false);
       setIsSidebarOpen(false);
 
+      console.log("Creating peer connection as receiver");
       // Create a new Peer connection as the receiver
       const peer = new Peer({
         initiator: false,
@@ -291,14 +339,15 @@ const Dashboard = () => {
         stream: currentStream,
         config: {
           iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        }
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+          ],
+        },
       });
 
       // Handle the "signal" event
       peer.on("signal", (data) => {
+        console.log("Generated answer signal:", data);
         socket.emit("answeredCall", {
           signal: data,
           from: me,
@@ -308,6 +357,7 @@ const Dashboard = () => {
 
       // Handle the "stream" event
       peer.on("stream", (remoteStream) => {
+        console.log("Received remote stream");
         if (reciverVideo.current) {
           reciverVideo.current.srcObject = remoteStream;
           reciverVideo.current.muted = false;
@@ -324,31 +374,43 @@ const Dashboard = () => {
 
       // If there's an incoming signal, process it
       if (callerSignal) {
+        console.log("Processing caller signal:", callerSignal);
         peer.signal(callerSignal);
+      } else {
+        console.error("No caller signal available!");
+        toast.error("Call data is incomplete. Please try again.");
+        endCallCleanup();
+        return;
       }
 
       // Store the peer connection reference
       connectionRef.current = peer;
-
-      // Stop the ringtone
-      ringtone.stop();
-
     } catch (error) {
       console.error("Error accepting call:", error);
-      
+
       // Provide specific error messages based on the error type
-      if (error.name === 'NotAllowedError') {
-        toast.error("Camera/microphone access was denied. Please allow access and try again.");
-      } else if (error.name === 'NotFoundError') {
-        toast.error("No camera or microphone found. Please check your device connections.");
-      } else if (error.name === 'NotReadableError') {
-        toast.error("Camera or microphone is already in use by another application.");
-      } else if (error.name === 'OverconstrainedError') {
-        toast.error("Camera doesn't support the requested resolution. Please try again.");
+      if (error.name === "NotAllowedError") {
+        toast.error(
+          "Camera/microphone access was denied. Please allow access and try again."
+        );
+      } else if (error.name === "NotFoundError") {
+        toast.error(
+          "No camera or microphone found. Please check your device connections."
+        );
+      } else if (error.name === "NotReadableError") {
+        toast.error(
+          "Camera or microphone is already in use by another application."
+        );
+      } else if (error.name === "OverconstrainedError") {
+        toast.error(
+          "Camera doesn't support the requested resolution. Please try again."
+        );
       } else {
-        toast.error("Failed to access camera/microphone. Please check your device settings.");
+        toast.error(
+          "Failed to access camera/microphone. Please check your device settings."
+        );
       }
-      
+
       // Clean up and reject the call
       endCallCleanup();
       handelrejectCall();
